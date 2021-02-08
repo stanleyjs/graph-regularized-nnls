@@ -1,4 +1,4 @@
-function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
+function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
 
     %  Inputs:
     %    X   : m x n data matrix to be factored
@@ -16,7 +16,17 @@ function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
     if ~exist('r','var')
         r = [];
     end
-
+    if nargout > 2
+        stats = struct();
+        % for housekeeping, go ahead and build the fields:
+        stats.mse = [];
+        stats.time.init = 0;
+        stats.time.iter = [];
+        stats.time.final = 0;
+        stats.obj = [];
+        stats.gradientnorm = [];
+        tic
+    end
     [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w,r);
     
     m = sz(1);
@@ -36,8 +46,11 @@ function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
     end
 
     %% objectives & updates: we are using a lot of extra variables here to 
-    % maybe reduce some flops from repetitive slicing.
-
+    % maybe reduce some flops from repetitive slicing by using these
+    % functions carefully.
+    msef = @(vA,u) 1/(nv) .*sum((x-vA*u).^2);
+    du = @(z) z(1:m*r);
+    dv = @(z) z(m*r+1:end);
     
     reconstruction = @(z,A,vA,u0) 0.5*norm(x-A*z-vA*u0)^2;
     
@@ -75,15 +88,25 @@ function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
     
         
     %% initialization
-    if opts.randInit
-        Wx = abs(randn(m,r));
-        Hx = abs(randn(r,n));
+    if (opts.initialization.W)
+        Wx = opts.initialization.W;
+        Hx = opts.initialization.H;
     else
-        [Wx,Hx] = nnmf(X,r);
-        
+        if opts.randInit
+            Wx = abs(randn(m,r));
+            Hx = abs(randn(r,n));
+        else
+            [Wx,Hx] = nnmf(X,r);
+
+        end
     end
-    Hx = Hx';
-    Wx = ((opts.LQF*speye(m)-L_w)\Wx);
+    if opts.smoothInit
+        Wx = ((speye(m)-opts.LQF*L_w)\Wx);
+    end
+    
+    if all(size(Hx) == [r,n])
+        Hx = Hx';
+    end
     
     wx = reshape(Wx,[],1);
     hx = reshape(Hx,[],1);
@@ -92,14 +115,71 @@ function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
     
     fasta_A = @(x) x;
     df = zeros(p,1);
+    
     disp('initialized')
+    if nargout >2
+        stats.time.init = toc;
+        
+    end
+    
     %% outer loop
-    for t = 1:maxIters
-        disp(num2str(t))
-        A = zeros(nv,p);   % matrix of least squares problem 
+    for t = 1:maxIters-1
+        if mod(t+1,5) ==0
+            disp(["R2R Iterate:", num2str(t+1)])
+        end
+        if nargout > 2
+            tic
+        end
+        f = df+f;
+        [A,vA] = compute_A(f,omega,m,r,nv,p);
 
+        
+        %ideally these sliced calls should be all done at once in FASTA to
+        %save a few flops..
+        u0 = f(1:m*r);
+        v0 = f(m*r+1:end);
 
-        %CONSTRUCTION OF MATRIX A, 
+        objt = @(z) obj(z,A,vA,f,u0,du(z));
+        gradt = @(z) gradf(z,A,vA,f,u0,du(z));
+        proxt = @(z,foo) proxg(z,f,u0,du(z),v0,dv(z));
+        gt = @(z) obj_g(v0+dv(z));
+        
+
+        [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,zeros(p,1),opts.fasta);
+        
+        if nargout > 2
+            stats.time.iter = [stats.time.iter toc];
+            stats.mse = [stats.mse msef(vA,u0)];
+            % zeros are used to compute objective here because df is the
+            % objective at the next step..
+            stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
+                obj_g(v0)];
+            stats.gradientnorm = [stats.gradientnorm norm(df)];
+            
+        end
+        
+        
+    end
+f = df +f;
+if nargout >2
+    stats.mse = [stats.mse msef(vA,u0)];
+    stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,du(f),zeros(m*r,1)) + obj_g(dv(f))];
+
+    tic
+end
+W = reshape(f(1:m*r),m,r);
+H = reshape(f(m*r+1:end),r,n)';
+Y = W*H';
+if nargout > 2
+    stats.time.final = toc + sum(stats.time.iter);
+end
+end 
+
+function [A,vA] = compute_A(f,omega,m,r,nv,p)
+    %CONSTRUCTION OF MATRIX A, 
+    
+    A = zeros(nv,p);   % matrix of least squares problem 
+
 %         for counter=1:nv
 %             %THIS IS MATRIX FORM FOR REFERENCE
 %             j = omega(counter,1); k = omega(counter,2); 
@@ -108,42 +188,20 @@ function [Y,W,H,obj_result] = boxR2RNNGLS(X, A_w, r, opts)
 %             index=ceil(j/m)+j-1;
 %             A(counter,index:r:index+r*m-1) = H(k,:); 
 %         end
-        
-        for counter=1:nv
-            % VECTOR FORM
-            j = omega(counter,1); k = omega(counter,2); 
-            index = r*m + r*(k-1)+1; 
-            A(counter,index:index+r-1) =f(j:m:m*r);
-            index=ceil(j/m)+j-1;
-            A(counter,index:m:index+r*m-1) = f(m*r+1+k*r-r:m*r+k*r);
 
-        end
-
-        A = sparse(A);
-        vA = sparse(A(:,1:m*r));
-        
-        %ideally these sliced calls should be all done at once in FASTA to
-        %save a few flops..
-        u0 = f(1:m*r);
-        v0 = f(m*r+1:end);
-        du = @(z) z(1:m*r);
-        dv = @(z) z(m*r+1:end);
-        objt = @(z) obj(z,A,vA,f,u0,du(z));
-        gradt = @(z) gradf(z,A,vA,f,u0,du(z));
-        proxt = @(z,foo) proxg(z,f,u0,du(z),v0,dv(z));
-        gt = @(z) obj_g(v0+dv(z));
-        [df,outs] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,zeros(p,1),opts.fasta);
-        outs
-        obj_result(t) = objt(df)
-        f = df+f;
-        
+    for counter=1:nv
+        % VECTOR FORM
+        j = omega(counter,1); k = omega(counter,2); 
+        index = r*m + r*(k-1)+1; 
+        A(counter,index:index+r-1) =f(j:m:m*r);
+        index=ceil(j/m)+j-1;
+        A(counter,index:m:index+r*m-1) = f(m*r+1+k*r-r:m*r+k*r);
     end
     
-W = reshape(f(1:m*r),m,r);
-H = reshape(f(m*r+1:end),r,n)';
-Y = W*H';
-end 
-
+    A = sparse(A);
+    vA = sparse(A(:,1:m*r));
+        
+end
 
 function [z] =l1_box_prox(z, f0, mu, m, r)
 
@@ -202,14 +260,24 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         sz = [m,n];
         %% Check opts and set defaults.
         % checking valid options are passed.
-        valid_options = {'fasta','maxIters','tol','verbose','recordObjective',...
-        'randInit','completion','L','normalizedLaplacian','LQF','l2','l1'};
+        valid_options = {'fasta','maxIters','tol','verbose',...
+        'recordObjective','initialization',...
+        'randInit','smoothInit',...
+        'completion','L',...
+        'normalizedLaplacian','LQF',...
+        'l2','l1'};
         fn = fieldnames(opts);
         for i = 1:length(fn)
-            assert(ismember(fn{i},valid_options),['Invalid option for boxR2R (',...
-                fn{i},').  Valid choices are: ',...
-              'fasta','maxIters','tol','verbose','recordObjective','randInit','completion', ...
-              'L', 'normalizedLaplacian', 'LQF','l2','l1']);
+            assert(ismember(fn{i},valid_options),...
+            ['Invalid option for boxR2R (',fn{i},').',...
+            '  Valid choices are: ',...
+              'fasta','maxIters',...
+              'tol','verbose',...
+              'recordObjective','initialization',...
+              'randInit','smoothInit', ...
+              'completion','L',  ...
+              'normalizedLaplacian', 'LQF', ...
+              'l2','l1']);
         end
         
         % fasta: inputs to fasta solver.
@@ -235,8 +303,13 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         if ~isfield(opts,'recordObjective')   
             opts.recordObjective = false;
         end
+        % initialization.W & .H: matrices to initialize from
+        if ~isfield(opts,'initialization')
+            opts.initialization = false;
+        end
         % randInit: 'true'=> initialize from abs(i.i.d. normal)
         % 'false' => init from nnmf(X,r)
+
         if ~isfield(opts,'randInit')
             opts.randInit = false;
         end
@@ -249,7 +322,6 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
             opts.L = false;
         end
 
-        
         % normalizedL: 'true'=> use a normalized Laplacian
         if ~isfield(opts,'normalizedLaplacian')   
             opts.normalizedLaplacian = false;
@@ -258,7 +330,10 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         assert(any([any(opts.normalizedLaplacian==[0,1])...
             islogical(opts.normalizedLaplacian)]),...
             'normalizedLaplacian must be [0,1] or logical.')
-        
+        % smoothInit: 'true'=> apply smoothing to first W.
+        if ~isfield(opts, 'smoothInit')
+            opts.smoothInit = false;
+        end
         % LQF: 'isnumeric(opts.LQF)'=> opts.LQF = lambda >=0, graph smoothness penalty
         if ~isfield(opts,'LQF')
             opts.LQF = 0;

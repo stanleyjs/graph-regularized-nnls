@@ -6,7 +6,7 @@ cluster_range = [ 2: max_clusters];
 avgs = zeros(length(cluster_range),1);
 clusters = zeros(size(X,1),length(cluster_range));
 for ix=2:length(cluster_range)+1
-    clusters(:,ix-1) = kmeans(X, cluster_range(ix-1));
+    clusters(:,ix-1) = kmeans(X, cluster_range(ix-1),'replicates',5);
     silhouette_avg = mean(silhouette(X, clusters(:,ix-1)));
     avgs(ix-1) = (silhouette_avg);
 end
