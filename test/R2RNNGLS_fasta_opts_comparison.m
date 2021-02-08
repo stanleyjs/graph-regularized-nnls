@@ -1,4 +1,9 @@
-
+%%  This script evaluates FASTA performance under different solver options
+% 1) Load example data from netnmfsc
+% 2) Create bigger datasets by multinomial resampling
+% 3) Test time, mse, etc for fasta defaults, no adaptation, acceleration,
+% and acceleration + adaptation.
+% Feb 8 2021: RandIndex appears to have some bugs in processing.
 close all;
 clear all;
 load('netnmfsc_comparison.mat')
@@ -11,7 +16,7 @@ netnmfsc.H = double(Hpy);
 netnmfsc.W = double(Wpy);
 
 r = 5;
-%% add some more cells for time-based comparison. Simple model is to resample the clusters.
+%% 2) add some more cells for time-based comparison. Simple model is to resample the clusters.
 median_library_size = ceil(median(sum(X,1)));
 k = length(unique(netnmfsc.labels));
 cluster_size = zeros(1,k);
@@ -45,7 +50,7 @@ end
 
 
 
-%% run experiment
+%% 3) run experiment
 clear results
 
 % tables for results
@@ -105,9 +110,7 @@ for multiple = 1:5
        %record clustering results
        results.silhouette{id} = [results.silhouette{id} score];
        results.ari{id} = [results.ari{id} ari];
-       
-       
-       
+
     end
 
 end
