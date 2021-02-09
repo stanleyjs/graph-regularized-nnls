@@ -76,7 +76,7 @@ for multiple = 1:5
     opts.smoothInit=true;
     opts.fasta.tol=1e-6;
     opts.maxIters=40;
-    opts.fasta.verbose=false;
+    opts.fasta.verbose=true;
     %construct initializations
     z = library_size_normalization(X1{multiple});
     
@@ -88,17 +88,29 @@ for multiple = 1:5
                
            case 'noadapt'
                opts.fasta.adaptive = false;
+               opts.fasta.accelerate = false;
            case 'accelerate+noadapt'
                opts.fasta.adaptive = false;
                opts.fasta.accelerate = true;
            case 'adaptive+accelerate'
+               opts.fasta.adaptive = true;
                opts.fasta.accelerate = true;
        end
+       
        
        [Y,W,H,obj] = boxR2RNNGLS(z,A,r,opts);
        
        %record time, rmse, objective results
-       results.time{id} = [results.time{id} [obj.time.init; obj.time.iter']];
+       t_update = [obj.time.init obj.time.iter];
+       sdif = opts.maxIters - size(t_update,2);
+       if sdif>0
+           pad = zeros(1,sdif);
+           t_update = [t_update,pad];
+           obj.mse = [obj.mse,pad];
+           obj.obj = [obj.obj, pad];
+           obj.gradientnorm = [obj.gradientnorm, pad];
+       end
+       results.time{id} = [results.time{id} t_update'];
        results.mse{id} = [results.mse{id} obj.mse'];
        results.obj{id} = [results.obj{id} obj.obj'];
        results.gradientnorm{id} = [results.gradientnorm{id} obj.gradientnorm'];
@@ -114,3 +126,22 @@ for multiple = 1:5
     end
 
 end
+
+
+%%
+save("fasta_opts_comparison")
+
+
+%%
+
+data_sizes = cellfun(@(z) size(z,2),X1,'UniformOutput', false);
+data_sizes = cell2mat(data_sizes);
+figure
+suptitle("FASTA step options comparison")
+hold on;
+title("40 iters time")
+for id = 1:numel(experiments)
+    plot((data_sizes),log(sum(results.time{id},1)),'LineWidth',2)
+end
+xlabel('data size')
+ylabel('log time (s)')

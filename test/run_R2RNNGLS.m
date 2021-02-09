@@ -16,7 +16,7 @@ z = library_size_normalization(X);
 opts.LQF = 10;
 opts.l1 = 0;
 [opts.initialization.W,opts.initialization.H] = nnmf(z,r);
-opts.randInit=false;
+opts.randInit=true;
 opts.smoothInit=true;
 opts.fasta.recordObjective=false;
 opts.fasta.tol=1e-6;
@@ -24,8 +24,8 @@ opts.fasta.verbose=false;
 opts.fasta.accelerate=true;
 opts.fasta.adaptive=true;
 opts.fasta.restart=true;
-opts.maxIters=40;
-[Y,W,H,obj] = boxR2RNNGLS(z,A,r,opts);
+opts.maxIters=2;
+[Y,W,H,~] = boxR2RNNGLS(z,A,r,opts);
 %%
 [k,labs,score] = select_clusters(netnmfsc.H');
 score

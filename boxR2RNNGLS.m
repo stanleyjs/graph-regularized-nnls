@@ -27,12 +27,13 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         stats.gradientnorm = [];
         tic
     end
+
     [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w,r);
-    
+
     m = sz(1);
     n = sz(2);
     p = (m + n) * r; % the number of variables in the least squares problem.
-   
+
     %% find nonzero entries for masking the data.
     if opts.completion
         [omega(:,1),omega(:,2)] = find(X);
@@ -44,7 +45,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     else 
         error('denoising (no mask) is not yet supported');
     end
-
+    
     %% objectives & updates: we are using a lot of extra variables here to 
     % maybe reduce some flops from repetitive slicing by using these
     % functions carefully.
@@ -88,7 +89,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     
         
     %% initialization
-    if (opts.initialization.W)
+    if isstruct(opts.initialization)
         Wx = opts.initialization.W;
         Hx = opts.initialization.H;
     else
@@ -101,7 +102,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         end
     end
     if opts.smoothInit
-        Wx = ((speye(m)-opts.LQF*L_w)\Wx);
+        Wx = ((speye(m)-opts.LQF*L_w)\Wx).^2;
     end
     
     if all(size(Hx) == [r,n])
@@ -124,7 +125,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     
     %% outer loop
     for t = 1:maxIters-1
-        if mod(t+1,5) ==0
+        if mod(t+1,5) ==0 & opts.verbose
             disp(["R2R Iterate:", num2str(t+1)])
         end
         if nargout > 2
@@ -145,20 +146,63 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         gt = @(z) obj_g(v0+dv(z));
         
 
-        [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,zeros(p,1),opts.fasta);
+        [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,df,opts.fasta);
         
+        if opts.earlyStop
+            % these values should probably be computed from fasta
+            % also consider location... this is pre update to f, so it is
+            % the t-1 iterate.
+            if t>1
+                mse_eval0 = mse_eval;
+                obj_eval0 = obj_eval;
+            end
+            mse_eval = msef(vA,u0);
+            obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
+                obj_g(v0);
+            gradient_norm = sqrt(sum(df.^2));
+            
+        else
+            mse_eval = [];
+            obj_eval = [];
+            gradient_norm = [];
+        end
         if nargout > 2
+            if isempty(mse_eval)
+                mse_eval = msef(vA,u0);
+                obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
+                    obj_g(v0);
+                gradient_norm = sqrt(sum(df.^2));
+            end
             stats.time.iter = [stats.time.iter toc];
-            stats.mse = [stats.mse msef(vA,u0)];
+            stats.mse = [stats.mse  msef(vA,u0)];
             % zeros are used to compute objective here because df is the
             % objective at the next step..
-            stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
-                obj_g(v0)];
-            stats.gradientnorm = [stats.gradientnorm norm(df)];
+            stats.obj = [stats.obj obj_eval];
+            stats.gradientnorm = [stats.gradientnorm gradient_norm];
             
         end
-        
-        
+        if opts.earlyStop
+            if gradient_norm/sqrt(p) <opts.tol
+                %updates are too small: this is equivalent to checking 
+                % the mse between the previous iterate 
+                break;
+            end
+            if t>1
+                if abs(mse_eval0/mse_eval)<opts.tol
+                        % ANOTHER EARLY STOPPING: IF OBSERVED ERROR DID NOT CHANGE OVER THE
+                         % ITERATIONS
+
+                    break;
+                end
+                if abs(obj_eval0/obj_eval)<opts.tol
+                    % objective did not change much.
+                    break;
+                end
+            end
+        end
+    
+
+
     end
 f = df +f;
 if nargout >2
@@ -204,7 +248,7 @@ function [A,vA] = compute_A(f,omega,m,r,nv,p)
 end
 
 function [z] =l1_box_prox(z, f0, mu, m, r)
-
+    disp("l1 shrink")
     w = box_prox(z(1:m*r),f0(1:m*r));
     h0 = f0(m*r+1:end);
     dh = z(m*r+1:end);
@@ -224,16 +268,20 @@ end
 
 
 function [z] = box_prox(z,f0)
-    z(z+f0<0) = 0;
+    z((z+f0)<0) = 0;
+    
 end
 
 function penalty = compute_LQF(z,L,m,r)
 
 %try the big kronecker product: feb 7 2020
+% requires changing L in the initialization to be L = kron(speye(r),L);
 
 % penalty = z((1:m*r))'*L;
 % penalty = penalty * z(1:m*r);
-%this appears to be faster than just multiplying by the big kronecker product.
+
+%%%
+%the following appears to be faster than just multiplying by the big kronecker product.
 penalty = 0;
     for j = 1:r
         Lv = L*z((j-1)*m+1:j*m);
@@ -244,10 +292,11 @@ end
 function update = compute_LQF_gradient(z,L,m,r)  
 
 %try the big kronecker product: feb 7 2020
-
+% requires changing L in the initialization to be L = kron(speye(r),L);
 % update = L*z((1:m*r));
-%this may be slower than just multiplying by the big kronecker product.
 
+%%%
+%the following appears to be faster than just multiplying by the big kronecker product.
 update = zeros(m*r,1);
     for j = 1:r
         update((j-1)*m+1:j*m) =  L*z((j-1)*m+1:j*m);
@@ -261,7 +310,8 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         %% Check opts and set defaults.
         % checking valid options are passed.
         valid_options = {'fasta','maxIters','tol','verbose',...
-        'recordObjective','initialization',...
+        'earlyStop',...
+        'initialization',...
         'randInit','smoothInit',...
         'completion','L',...
         'normalizedLaplacian','LQF',...
@@ -273,7 +323,8 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
             '  Valid choices are: ',...
               'fasta','maxIters',...
               'tol','verbose',...
-              'recordObjective','initialization',...
+              'earlyStop',...
+              'initialization',...
               'randInit','smoothInit', ...
               'completion','L',  ...
               'normalizedLaplacian', 'LQF', ...
@@ -288,7 +339,12 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         if ~isfield(opts,'maxIters')
             opts.maxIters = 20;
         end
-
+        
+        % earlyStop: check relative decreases in residuals and gradient
+        % norm.
+        if ~isfield(opts,'earlyStop')
+            opts.earlyStop = true;
+        end
         % tol:  The relative decrease in the residuals before the method stops
         if ~isfield(opts,'tol') % Stopping tolerance
             opts.tol = 1e-3;
@@ -298,11 +354,12 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         if ~isfield(opts,'verbose')   
             opts.verbose = false;
         end
-
-        % recordObjective: 'true'=> evaluate objective at every iteration
-        if ~isfield(opts,'recordObjective')   
-            opts.recordObjective = false;
+        if ~isfield(opts.fasta,'verbose')
+            opts.fasta.verbose = opts.verbose;
         end
+
+        
+
         % initialization.W & .H: matrices to initialize from
         if ~isfield(opts,'initialization')
             opts.initialization = false;
