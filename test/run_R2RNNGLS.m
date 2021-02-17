@@ -1,6 +1,6 @@
 close all;
 clear all;
-load('netnmfsc_comparison.mat')
+load('../data/netnmfsc_comparison.mat')
 X = double(X);
 [m,n] = size(X);
 netnmfsc.labels = double(clusters)+1;

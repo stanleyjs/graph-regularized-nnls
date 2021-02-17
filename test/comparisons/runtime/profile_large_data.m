@@ -1,6 +1,7 @@
 close all;
 clear all;
-load('/home/jay/ExtraDrive1/External/experiments/r2rilsexperiment/laplacian_regularization/boxR2RNNGLS/test/netnmfsc_comparison.mat')
+data_folder = '../../../data/';
+load([data_folder 'netnmfsc_comparison.mat'])
 load('resampled_netnmfsc.mat')
 
 %%
@@ -12,7 +13,7 @@ opts.LQF = 10;
 opts.l1 = 0;
 opts.randInit=true;
 opts.fasta.recordObjective=false;
-opts.smoothInit=false;
+opts.smoothInit=true;
 opts.fasta.tol=1e-6;
 opts.maxIters=2;
 opts.fasta.verbose=true;

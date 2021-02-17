@@ -1,6 +1,6 @@
 close all;
 clear all;
-load('/home/jay/ExtraDrive1/External/experiments/r2rilsexperiment/laplacian_regularization/boxR2RNNGLS/test/netnmfsc_comparison.mat')
+load('../data/netnmfsc_comparison.mat')
 X = double(X);
 [m,n] = size(X);
 netnmfsc.labels = double(clusters)+1;

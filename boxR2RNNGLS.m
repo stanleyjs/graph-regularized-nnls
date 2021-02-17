@@ -104,7 +104,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     if opts.smoothInit
         [Wx,~,~] = svds(L_w,r);
         Wx = Wx-min(Wx);
-        Hx = Wx'*X;
+        Hx = lsqr(Wx,X);
     end
     
     if all(size(Hx) == [r,n])

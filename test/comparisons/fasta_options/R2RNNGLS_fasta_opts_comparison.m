@@ -6,7 +6,8 @@
 % Feb 8 2021: RandIndex appears to have some bugs in processing.
 close all;
 clear all;
-load('netnmfsc_comparison.mat')
+data_folder = '../../../data/';
+load([data_folder 'netnmfsc_comparison.mat'])
 X = double(X);
 [m,n] = size(X);
 netnmfsc.labels = double(clusters)+1;
@@ -17,10 +18,6 @@ netnmfsc.W = double(Wpy);
 
 r = 5;
 %% 2) add some more cells for time-based comparison. Simple model is to resample the clusters.
-close all;
-clear all;
-load('netnmfsc_comparison.mat')
-
 median_library_size = ceil(median(sum(X,1)));
 k = length(unique(netnmfsc.labels));
 cluster_size = zeros(1,k);

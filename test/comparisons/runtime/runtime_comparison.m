@@ -1,6 +1,7 @@
 close all;
 clear all;
-load('/home/jay/ExtraDrive1/External/experiments/r2rilsexperiment/laplacian_regularization/boxR2RNNGLS/test/netnmfsc_comparison.mat')
+data_folder = '../../../data/';
+load([data_folder 'netnmfsc_comparison.mat'])
 load('resampled_netnmfsc.mat')
 
 %%
