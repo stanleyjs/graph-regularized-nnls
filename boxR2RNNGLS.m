@@ -53,17 +53,17 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     du = @(z) z(1:m*r);
     dv = @(z) z(m*r+1:end);
     
-    reconstruction = @(z,A,vA,u0) 0.5*norm(x-A*z-vA*u0)^2;
+%     reconstruction = @(z,A,vA,u0) 
     
     l1 = @(v) sum(abs(v));
     l2 = @(df) sum(df.^2);
     lqf = @(u) compute_LQF(u,L_w,m,r);
     
     
-    obj = @(z,A,vA,f0,u0,du)  reconstruction(z,A,vA,u0);
+    obj = @(z,A,vA,f0,u0,du,dv)  reconstruction(x,A,u0,du,dv);
     obj_g  = @(z) 0;
     %gradients
-    gradf = @(z,A,vA,f0,u0,du) -A' * (x - A*z - vA*u0);
+    gradf = @(z,A,vA,f0,u0,du,dv) reconstruction_gradient(x,A,u0,du,dv);
     lqf_grad = @(u) [compute_LQF_gradient(u,L_w,m,r);zeros(n*r,1)];
     l2_grad = @(z) z;
     
@@ -71,12 +71,12 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     proxg = @(z,f0,u0,du,v0,dv) box_prox(z,f0);
     
     if opts.LQF>0
-        obj = @(z,A,vA,f0,u0,du) obj(z,A,vA,f0,u0,du) + opts.LQF * lqf(du+u0);
-        gradf = @(z,A,vA,f0,u0,du) gradf(z,A,vA,f0,u0,du) + opts.LQF * lqf_grad(du+u0);
+        obj = @(z,A,vA,f0,u0,du,dv) obj(z,A,vA,f0,u0,du,dv) + opts.LQF * lqf(du+u0);
+        gradf = @(z,A,vA,f0,u0,du,dv) gradf(z,A,vA,f0,u0,du,dv) + opts.LQF * lqf_grad(du+u0);
     end
     if opts.l2>0
-        obj = @(z,A,vA,f0,u0,du) obj(z,A,vA,f0,u0,du) + opts.l2 * l2(z);
-        gradf = @(z,A,vA,f0,u0,du) gradf(z,A,vA,f0,u0) + opts.l2 *l2_grad(z);
+        obj = @(z,A,vA,f0,u0,du,dv) obj(z,A,vA,f0,u0,du,dv) + opts.l2 * l2(z);
+        gradf = @(z,A,vA,f0,u0,du,dv) gradf(z,A,vA,f0,u0,du,dv) + opts.l2 *l2_grad(z);
     end
     if opts.l1>0
         %this prox will be totally different than the box - it is not a
@@ -102,7 +102,9 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         end
     end
     if opts.smoothInit
-        Wx = ((speye(m)-opts.LQF*L_w)\Wx).^2;
+        [Wx,~,~] = svds(L_w,r);
+        Wx = Wx-min(Wx);
+        Hx = Wx'*X;
     end
     
     if all(size(Hx) == [r,n])
@@ -140,8 +142,8 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         u0 = f(1:m*r);
         v0 = f(m*r+1:end);
 
-        objt = @(z) obj(z,A,vA,f,u0,du(z));
-        gradt = @(z) gradf(z,A,vA,f,u0,du(z));
+        objt = @(z) obj(z,A,vA,f,u0,du(z),dv(z)); 
+        gradt = @(z) gradf(z,A,vA,f,u0,du(z),dv(z));
         proxt = @(z,foo) proxg(z,f,u0,du(z),v0,dv(z));
         gt = @(z) obj_g(v0+dv(z));
         
@@ -157,7 +159,7 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
                 obj_eval0 = obj_eval;
             end
             mse_eval = msef(vA,u0);
-            obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
+            obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1),zeros(n*r,1)) + ...
                 obj_g(v0);
             gradient_norm = sqrt(sum(df.^2));
             
@@ -200,14 +202,21 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
                 end
             end
         end
-    
+        if opts.netnmfscStop
+            if t>1
+                if abs(obj_eval0-obj_eval)<opts.netnmfscStop
+                    break;
+                end
+            end
+        end
+            
 
 
     end
 f = df +f;
 if nargout >2
     stats.mse = [stats.mse msef(vA,u0)];
-    stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,du(f),zeros(m*r,1)) + obj_g(dv(f))];
+    stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,du(f),zeros(m*r,1),zeros(n*r,1)) + obj_g(dv(f))];
 
     tic
 end
@@ -218,7 +227,22 @@ if nargout > 2
     stats.time.final = toc + sum(stats.time.iter);
 end
 end 
+function [penalty] = reconstruction(x,A,u0,du,dv)
 
+    penalty = [du+u0;dv];
+    penalty = A*penalty;
+    penalty = x-penalty;
+    penalty = (penalty.^2);
+    penalty = 0.5*sum(penalty);
+end
+function [gradient] = reconstruction_gradient(x,A,u0,du,dv)
+
+    gradient = [du+u0;dv];
+    gradient = A*gradient;
+    gradient = x-gradient;
+    gradient = -A'*gradient;
+    
+end
 function [A,vA] = compute_A(f,omega,m,r,nv,p)
     %CONSTRUCTION OF MATRIX A, 
     
@@ -315,7 +339,7 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         'randInit','smoothInit',...
         'completion','L',...
         'normalizedLaplacian','LQF',...
-        'l2','l1'};
+        'l2','l1','netnmfscStop'};
         fn = fieldnames(opts);
         for i = 1:length(fn)
             assert(ismember(fn{i},valid_options),...
@@ -328,7 +352,7 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
               'randInit','smoothInit', ...
               'completion','L',  ...
               'normalizedLaplacian', 'LQF', ...
-              'l2','l1']);
+              'l2','l1','netnmfscStop']);
         end
         
         % fasta: inputs to fasta solver.
@@ -339,7 +363,9 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         if ~isfield(opts,'maxIters')
             opts.maxIters = 20;
         end
-        
+        if ~isfield(opts,'netnmfscStop')
+            opts.netnmfscStop = 1e-2;
+        end
         % earlyStop: check relative decreases in residuals and gradient
         % norm.
         if ~isfield(opts,'earlyStop')
@@ -349,7 +375,6 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
         if ~isfield(opts,'tol') % Stopping tolerance
             opts.tol = 1e-3;
         end
-
         % verbose: 'true' => print status information on every iteration
         if ~isfield(opts,'verbose')   
             opts.verbose = false;
