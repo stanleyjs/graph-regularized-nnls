@@ -6,7 +6,7 @@
 % Feb 8 2021: RandIndex appears to have some bugs in processing.
 close all;
 clear all;
-data_folder = '../../../data/';
+data_folder = '../../../datasets/';
 load([data_folder 'netnmfsc_comparison.mat'])
 X = double(X);
 [m,n] = size(X);

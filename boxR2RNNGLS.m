@@ -1,4 +1,4 @@
-function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
+function [Y,W,H,stats,W0,H0] = boxR2RNNGLS(X, A_w, r, opts)
 
     %  Inputs:
     %    X   : m x n data matrix to be factored
@@ -104,31 +104,57 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
     if opts.smoothInit
         [Wx,~,~] = svds(L_w,r);
         Wx = Wx-min(Wx);
-        Hx = lsqr(Wx,X);
+        
+        wx = reshape(Wx,[],1);    
+        A = zeros(nv,n*r);
+        %MATRIX FORM
+        for counter = 1:nv
+            j = omega(counter,1); k = omega(counter,2);
+%             Hix = j:m:(m*r);
+%             A(counter,Hix) = H(k,:);
+            Wix = ((k-1)*r)+1;
+            Wix2 = (Wix)+r-1;
+            A(counter,Wix:Wix2) = Wx(j,:);
+        end
+
+        A = sparse(A);
+        Hx = fasta_nonNegLeastSquares( A,A',x,0,zeros(n*r,1),opts.fasta,0 );
+        Hx = reshape(Hx,r,n)';
     end
     
     if all(size(Hx) == [r,n])
         Hx = Hx';
     end
     
+    
+    if nargout>3 %% RETURN THE INITIAL MATRICES: FOR TESTING
+        W0 = Wx;
+        H0 = Hx;
+    end
     wx = reshape(Wx,[],1);
-    hx = reshape(Hx,[],1);
+    hx = reshape(Hx',[],1);
     maxIters = opts.maxIters;
     f = [wx;hx];
     
     fasta_A = @(x) x;
     df = zeros(p,1);
-    
-    disp('initialized')
+    [A0,vA0] = compute_A(f,omega,m,r,nv,p);
+    obj0 = obj(zeros(p,1),A0,vA0,f,wx,zeros(m*r,1),zeros(n*r,1));
+    if opts.verbose
+        fprintf(['************** R2R Initialized ************** \n'])
+        fprintf(['******** Objective :',num2str(obj0) ' ********\n'])
+    end
     if nargout >2
         stats.time.init = toc;
+        stats.obj = obj0;
         
     end
     
     %% outer loop
     for t = 1:maxIters-1
         if mod(t+1,5) ==0 & opts.verbose
-            disp(["R2R Iterate:", num2str(t+1)])
+            fprintf(['************** R2R Iterate:', num2str(t+1), ' ************** \n'])
+            fprintf(['******** Objective :',num2str(objt(zeros(p,1))) ' ********\n'])
         end
         if nargout > 2
             tic
@@ -139,15 +165,13 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         
         %ideally these sliced calls should be all done at once in FASTA to
         %save a few flops..
-        u0 = f(1:m*r);
-        v0 = f(m*r+1:end);
+        u0 = du(f);
+        v0 = dv(f);
 
         objt = @(z) obj(z,A,vA,f,u0,du(z),dv(z)); 
         gradt = @(z) gradf(z,A,vA,f,u0,du(z),dv(z));
         proxt = @(z,foo) proxg(z,f,u0,du(z),v0,dv(z));
         gt = @(z) obj_g(v0+dv(z));
-        
-
         [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,df,opts.fasta);
         
         if opts.earlyStop
@@ -171,8 +195,8 @@ function [Y,W,H,stats] = boxR2RNNGLS(X, A_w, r, opts)
         if nargout > 2
             if isempty(mse_eval)
                 mse_eval = msef(vA,u0);
-                obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1)) + ...
-                    obj_g(v0);
+                obj_eval = obj(zeros(p,1),A,vA,f,u0,zeros(m*r,1),zeros(n*r,1)) + ...
+                obj_g(v0);
                 gradient_norm = sqrt(sum(df.^2));
             end
             stats.time.iter = [stats.time.iter toc];
@@ -233,39 +257,39 @@ function [penalty] = reconstruction(x,A,u0,du,dv)
     penalty = A*penalty;
     penalty = x-penalty;
     penalty = (penalty.^2);
-    penalty = 0.5*sum(penalty);
+    penalty = sum(penalty);
 end
 function [gradient] = reconstruction_gradient(x,A,u0,du,dv)
 
     gradient = [du+u0;dv];
     gradient = A*gradient;
     gradient = x-gradient;
-    gradient = -A'*gradient;
+    gradient = -2.*A'*gradient;
     
 end
 function [A,vA] = compute_A(f,omega,m,r,nv,p)
     %CONSTRUCTION OF MATRIX A, 
     
-    A = zeros(nv,p);   % matrix of least squares problem 
+    A = zeros(nv,p);
+        
+        %MATRIX FORM
+%     for counter = 1:nv
+%         j = omega(counter,1); k = omega(counter,2);
+%          Hix = j:m:(m*r);
+%          A(counter,Hix) = H(k,:);
+%         Wix = (m*r)+((k-1)*r)+1;
+%         Wix2 = (Wix)+r-1;
+%         A(counter,Wix:Wix2) = W(j,:);
+%     end
 
-%         for counter=1:nv
-%             %THIS IS MATRIX FORM FOR REFERENCE
-%             j = omega(counter,1); k = omega(counter,2); 
-%             index = r*m + r*(k-1)+1; 
-%             A(counter,index:index+r-1) =W(j,:);
-%             index=ceil(j/m)+j-1;
-%             A(counter,index:r:index+r*m-1) = H(k,:); 
-%         end
-
-    for counter=1:nv
-        % VECTOR FORM
-        j = omega(counter,1); k = omega(counter,2); 
-        index = r*m + r*(k-1)+1; 
-        A(counter,index:index+r-1) =f(j:m:m*r);
-        index=ceil(j/m)+j-1;
-        A(counter,index:m:index+r*m-1) = f(m*r+1+k*r-r:m*r+k*r);
+    for counter = 1:nv
+        j = omega(counter,1); k = omega(counter,2);
+        Hix = j:m:(m*r);
+        A(counter,Hix) = f(m*r+(k-1)*r+1:m*r+k*r); %the k-th column of H
+        Wix = (m*r)+((k-1)*r)+1;
+        Wix2 = (Wix)+r-1;
+        A(counter,Wix:Wix2) = f(j:m:m*r);
     end
-    
     A = sparse(A);
     vA = sparse(A(:,1:m*r));
         
@@ -468,7 +492,7 @@ function [opts,X,A_w,D_w,L_w,r,sz] = processInputs(opts, X, A_w, r)
             %in this case, L did not get set from opts.L==1
             D_w = sum(A_w,1);
             if ~opts.normalizedLaplacian
-                L_w = D_w - A_w;
+                L_w = diag(D_w) - A_w;
             else
                 error('normalized Laplacian not currently supported')
             end
