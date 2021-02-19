@@ -5,37 +5,122 @@ load([data_folder 'netnmfsc_comparison.mat'])
 load('resampled_netnmfsc.mat')
 
 %%
-ntrials = 5;
+clear opts
+ntrials = 3;
 times = zeros(numel(X1),ntrials);
 r=5;
-for ix = 1:5
+outputs = {}
+for ix = 5
     disp(['current multiple ', num2str(ix)])
     clear opts %reset to defaults
     
     % set stable options
-    opts.LQF = 10;
-    opts.l1 = 0;
-    opts.randInit=true;
-    opts.fasta.recordObjective=false;
-    opts.smoothInit=true;
-    opts.fasta.tol=1e-3;
-    opts.fasta.maxIters=10;
-    opts.maxIters=50;
-    opts.fasta.verbose=false;
-    %construct initializations
-    opts.fasta.adaptive=true;
-    opts.fasta.accelerate=true;
+opts.LQF = 10;
+opts.l1 = 0;
+opts.randInit=false;
+opts.fasta.recordObjective=false;
+opts.smoothInit=true;
+opts.fasta.tol=1e-3;
+opts.fasta.maxIters = 100;
+opts.maxIters=1000;
+opts.earlyStop=false;
+opts.fasta.verbose=false;
+opts.fasta.adaptive=true;
+opts.fasta.accelerate=true;
+
+opts.netnmfscStop=false;
+opts.verbose=true;
     for trial = 1:ntrials
-        
+        outputs{ix}.obj = {};
         tt = tic;
         z = library_size_normalization(X1{ix});
-        [Y,W,H,obj] = boxR2RNNGLS(z,A,r,opts);
+        [Y,W,H,obj,W0,H0] = boxR2RNNGLS(z,A,r,opts);
+        outputs{ix}.W0 = W0;
+        outputs{ix}.H0 = H0;
+        outputs{ix}.obj{trial} = obj;
         times(ix,trial) = toc(tt);
         disp(obj.obj)
         disp((['%%%% trial completed in ' num2str(times(ix,trial)) ' seconds']))
     end
 
 end
+
+
+%%
+clear opts
+opts.LQF = 10;
+opts.l1 = 0;
+opts.initialization.W = W0;
+opts.initialization.H = H0;
+opts.randInit=false;
+opts.fasta.recordObjective=false;
+opts.smoothInit=false;
+opts.fasta.tol=1e-3;
+opts.fasta.maxIters = 2000;
+opts.maxIters=100;
+opts.earlyStop=false;
+opts.fasta.verbose=true;
+opts.fasta.adaptive=true;
+opts.fasta.accelerate=false;
+
+opts.fasta.tau=1000;
+opts.verbose=true;
+tt = tic;
+opts.netnmfscStop=false;
+
+[Y,W,H,obj,W0,H0] = boxR2RNNGLS(z,A,r,opts);
+t = toc(tt);
+%%
+save('smooth_initialization_objectives_large','W0','H0','obj');
+%%
+load('python_runtimes_obj')
+%%
+figure
+elapsed_time = [0 cumsum([ obj.time.iter])];
+ objective = obj.obj(2:end);
+ elapsed_pytimes = [0 ;(pytimes)];
+ plot(elapsed_pytimes(1:100:find(elapsed_pytimes>60,1)),py_obj(1:100:find(elapsed_pytimes>60,1)),'*-','LineWidth',2)
+ hold on
+plot(elapsed_time(elapsed_time<60),objective(elapsed_time<60),'*-','LineWidth',2)
+% 
+
+% hold on
+xlabel('time elapsed','FontSize',20)
+ylabel('objective function','FontSize',20)
+
+set(gca,'YScale','log')
+legend({'netnmfsc','r2r'},'FontSize',20)
+title("Non-negative factorization: objective vs. time, 100x1440",'FontSize',20)
+set(gcf,'Units','inches');
+screenposition = get(gcf,'Position');
+set(gcf,...
+    'PaperPosition',[0 0 screenposition(3:4)],...
+    'PaperSize',[screenposition(3:4)]);
+print -dpdf -painters large_runtime_comparison2
+
+%%
+figure
+elapsed_time = [0 cumsum([ obj.time.iter])];
+ objective = obj.obj(2:end);
+ elapsed_pytimes = [0 ;(pytimes)];
+ plot(elapsed_pytimes(1:100:end),py_obj(1:100:end),'*-','LineWidth',2)
+ hold on
+plot(elapsed_time,objective,'*-','LineWidth',2)
+% 
+
+% hold on
+xlabel('time elapsed','FontSize',20)
+ylabel('objective function','FontSize',20)
+
+set(gca,'YScale','log')
+legend({'netnmfsc','r2r'},'FontSize',20)
+title("Non-negative factorization: objective vs. time, 100x1440",'FontSize',20)
+set(gcf,'Units','inches');
+screenposition = get(gcf,'Position');
+set(gcf,...
+    'PaperPosition',[0 0 screenposition(3:4)],...
+    'PaperSize',[screenposition(3:4)]);
+print -dpdf -painters large_runtime_comparison2
 %%
 save('matlab_times', 'times')
 %%

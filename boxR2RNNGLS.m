@@ -72,7 +72,7 @@ function [Y,W,H,stats,W0,H0] = boxR2RNNGLS(X, A_w, r, opts)
     
     if opts.LQF>0
         obj = @(z,A,vA,f0,u0,du,dv) obj(z,A,vA,f0,u0,du,dv) + opts.LQF * lqf(du+u0);
-        gradf = @(z,A,vA,f0,u0,du,dv) gradf(z,A,vA,f0,u0,du,dv) + opts.LQF * lqf_grad(du+u0);
+        gradf = @(z,A,vA,f0,u0,du,dv) gradf(z,A,vA,f0,u0,du,dv) + opts.LQF *2* lqf_grad(du+u0);
     end
     if opts.l2>0
         obj = @(z,A,vA,f0,u0,du,dv) obj(z,A,vA,f0,u0,du,dv) + opts.l2 * l2(z);
@@ -157,9 +157,10 @@ function [Y,W,H,stats,W0,H0] = boxR2RNNGLS(X, A_w, r, opts)
             fprintf(['******** Objective :',num2str(objt(zeros(p,1))) ' ********\n'])
         end
         if nargout > 2
-            tic
+            titer = tic;
         end
         f = df+f;
+        f(f<0) = 0;
         [A,vA] = compute_A(f,omega,m,r,nv,p);
 
         
@@ -172,7 +173,7 @@ function [Y,W,H,stats,W0,H0] = boxR2RNNGLS(X, A_w, r, opts)
         gradt = @(z) gradf(z,A,vA,f,u0,du(z),dv(z));
         proxt = @(z,foo) proxg(z,f,u0,du(z),v0,dv(z));
         gt = @(z) obj_g(v0+dv(z));
-        [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,df,opts.fasta);
+        [df,~] = fasta(fasta_A,fasta_A,objt,gradt,gt,proxt,zeros(p,1),opts.fasta);
         
         if opts.earlyStop
             % these values should probably be computed from fasta
@@ -199,7 +200,7 @@ function [Y,W,H,stats,W0,H0] = boxR2RNNGLS(X, A_w, r, opts)
                 obj_g(v0);
                 gradient_norm = sqrt(sum(df.^2));
             end
-            stats.time.iter = [stats.time.iter toc];
+            stats.time.iter = [stats.time.iter toc(titer)];
             stats.mse = [stats.mse  msef(vA,u0)];
             % zeros are used to compute objective here because df is the
             % objective at the next step..
@@ -241,14 +242,13 @@ f = df +f;
 if nargout >2
     stats.mse = [stats.mse msef(vA,u0)];
     stats.obj = [stats.obj obj(zeros(p,1),A,vA,f,du(f),zeros(m*r,1),zeros(n*r,1)) + obj_g(dv(f))];
-
-    tic
+    tstop = tic;
 end
 W = reshape(f(1:m*r),m,r);
 H = reshape(f(m*r+1:end),r,n)';
 Y = W*H';
 if nargout > 2
-    stats.time.final = toc + sum(stats.time.iter);
+    stats.time.final = toc(tstop) + sum(stats.time.iter);
 end
 end 
 function [penalty] = reconstruction(x,A,u0,du,dv)
@@ -264,7 +264,7 @@ function [gradient] = reconstruction_gradient(x,A,u0,du,dv)
     gradient = [du+u0;dv];
     gradient = A*gradient;
     gradient = x-gradient;
-    gradient = -2.*A'*gradient;
+    gradient = -2*A'*gradient;
     
 end
 function [A,vA] = compute_A(f,omega,m,r,nv,p)
